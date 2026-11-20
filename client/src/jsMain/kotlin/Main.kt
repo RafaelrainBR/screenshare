@@ -188,6 +188,8 @@ fun main() {
         session = null
         websocketService.leaveRoom()
         InterfaceMutations.setTrayRoom(null)
+        // The next room starts with its sound on.
+        if (InterfaceMutations.isOutputMuted) InterfaceMutations.toggleOutputMute()
         ui.mutations.UserListMutations.updateUserList(emptyList(), null)
         ui.Elements.messageInput.value = ""
         ui.Elements.roomIdInput.value = ""

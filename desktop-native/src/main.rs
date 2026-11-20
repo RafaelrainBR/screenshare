@@ -225,8 +225,10 @@ pub struct App {
     /// A device picked while that audio was on: turn it off, then back on with the new device.
     mic_restart: bool,
     output_restart: bool,
-    /// The room sound was muted (saved like the web screenshare.outputMuted).
+    /// The room sound was muted in this room; every room starts with it on (the web does the same).
     output_muted: bool,
+    /// When the last audio command went out, for audio_busy.
+    audio_sent: Option<Instant>,
     /// Room tones on (saved like the web screenshare.roomSounds), the last one heard and when.
     room_sounds: bool,
     /// "Enviar estatísticas de uso anônimas" (desktop_native::metrics), saved in audio.json.
@@ -336,7 +338,6 @@ fn boot() -> (App, Task<Message>) {
         profile: ui::profile::load(),
         autostart: startup::autostart_enabled(),
         has_tray: tray::install(),
-        output_muted: prefs.output_muted,
         room_sounds: !prefs.room_sounds_off,
         metrics_on: !prefs.usage_metrics_off,
         share_border: prefs.share_border,
@@ -686,8 +687,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             }
             // Dropping Running joins the session thread: the engine stops the share and closes peers.
             let windowed = set_floating(app, None);
-            let App { name, rooms, last_share, mic_device, output_device, output_muted, room_sounds, metrics_on, share_border, camera_device, profile, advanced, has_tray, notice, chat_hidden, rail_hidden, compact, visible, voice_volumes, update, updating, .. } = std::mem::take(app);
-            *app = App { name, rooms, last_share, mic_device, output_device, output_muted, room_sounds, metrics_on, share_border, camera_device, profile, advanced, has_tray, notice, chat_hidden, rail_hidden, compact, visible, voice_volumes, update, updating, ..Default::default() };
+            let App { name, rooms, last_share, mic_device, output_device, room_sounds, metrics_on, share_border, camera_device, profile, advanced, has_tray, notice, chat_hidden, rail_hidden, compact, visible, voice_volumes, update, updating, .. } = std::mem::take(app);
+            *app = App { name, rooms, last_share, mic_device, output_device, room_sounds, metrics_on, share_border, camera_device, profile, advanced, has_tray, notice, chat_hidden, rail_hidden, compact, visible, voice_volumes, update, updating, ..Default::default() };
             tray::update(tray_state(app));
             return windowed.chain(operation::focus(NAME_INPUT));
         }
@@ -761,9 +762,10 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
             }
         }
         Message::ToggleMic => audio(app, AudioControl::Microphone { enabled: !app.view.microphone_enabled, device_id: app.mic_device.clone() }),
+        // A click before the last command lands would read a stale state and undo it.
+        Message::ToggleOutput if audio_busy(app.audio_sent.map(|at| at.elapsed()), app.view.audio_pending) => {}
         Message::ToggleOutput => {
             app.output_muted = app.view.output_enabled;
-            save_audio(app);
             audio(app, AudioControl::Output { enabled: !app.view.output_enabled, device_id: app.output_device.clone() });
         }
         Message::MicDevice(id) => {
@@ -1105,7 +1107,7 @@ pub fn sharing(view: &SessionView) -> bool {
 }
 
 fn save_audio(app: &App) {
-    startup::save_audio_prefs(&startup::AudioPrefs { output_muted: app.output_muted, output_device: app.output_device.clone(), room_sounds_off: !app.room_sounds, usage_metrics_off: !app.metrics_on, share_border: app.share_border });
+    startup::save_audio_prefs(&startup::AudioPrefs { output_muted: false, output_device: app.output_device.clone(), room_sounds_off: !app.room_sounds, usage_metrics_off: !app.metrics_on, share_border: app.share_border });
 }
 
 /// "Volume para você" as the engine has it: the saved one for voices, 100 when never set.
@@ -1122,7 +1124,14 @@ fn send_volume(app: &mut App, peer: String, screen: bool, percent: u8) {
     audio(app, AudioControl::Volume { peer_id: peer, volume: f64::from(percent) / 100.0, screen });
 }
 
+/// An audio command is on its way: the session has not counted it yet (a few ms) or the engine
+/// has not answered. Past 2 s a stuck request stops blocking the button.
+fn audio_busy(since_sent: Option<Duration>, pending: usize) -> bool {
+    since_sent.is_some_and(|since| since < Duration::from_secs(2) && (pending > 0 || since < Duration::from_millis(300)))
+}
+
 fn audio(app: &mut App, control: AudioControl) {
+    app.audio_sent = Some(Instant::now());
     app.mic_attempt = matches!(control, AudioControl::Microphone { enabled: true, .. });
     if let Some(running) = &app.running {
         let _ = running.audio.send((app.view.generation, control));
@@ -1223,7 +1232,7 @@ fn tick(app: &mut App) -> Task<Message> {
     for (peer, screen, percent) in pending {
         send_volume(app, peer, screen, percent);
     }
-    // The web plays the room sound unless it was muted last time; again after each reconnection.
+    // Every room starts with its sound on, as on the web; after a reconnection it stays as it was.
     // It waits for the device list, so a saved output that went away falls back to the default.
     let devices_ready = app.view.devices_loaded || app.view.devices_error.is_some();
     if app.view.local_socket_id.is_some() && devices_ready && app.output_generation != app.view.generation {
@@ -1675,4 +1684,18 @@ fn main() -> iced::Result {
             ..Default::default()
         })
         .run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sound_button_waits_for_the_last_audio_command() {
+        assert!(!audio_busy(None, 0), "nothing sent yet");
+        assert!(audio_busy(Some(Duration::from_millis(50)), 0), "sent, not counted by the session yet");
+        assert!(audio_busy(Some(Duration::from_millis(800)), 1), "the engine has not answered");
+        assert!(!audio_busy(Some(Duration::from_millis(800)), 0), "answered");
+        assert!(!audio_busy(Some(Duration::from_secs(3)), 1), "a stuck request stops blocking");
+    }
 }

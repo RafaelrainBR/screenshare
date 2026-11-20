@@ -108,7 +108,9 @@ object InterfaceMutations {
 
     var selectedOutputDeviceId: String? = null
     private var focusedTileId: String? = null
-    private var outputMuted = window.localStorage.getItem("screenshare.outputMuted") == "true"
+
+    // Every room starts with its sound on: a mute lasts until leaving, it is not remembered.
+    private var outputMuted = false
     val isOutputMuted: Boolean
         get() = outputMuted
     private var noticeTimeout: Int? = null
@@ -894,7 +896,6 @@ object InterfaceMutations {
         CoroutineScope(
             Dispatchers.Main,
         ).launch { runCatching { DesktopEnvironment.setTrayState("output", outputMuted) } }
-        window.localStorage.setItem("screenshare.outputMuted", outputMuted.toString())
         Elements.outputToggle.classList.toggle("muted", outputMuted)
         document.getElementById("outputSlash")?.classList?.toggle("hidden", !outputMuted)
         val label = if (outputMuted) "Ativar saída de áudio" else "Silenciar saída de áudio"
