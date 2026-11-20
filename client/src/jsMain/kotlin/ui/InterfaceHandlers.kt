@@ -384,10 +384,18 @@ private fun setupShareMenu() {
     renderShareSettings()
 }
 
+/** The wizard list a menu row edits; Elements already holds it, so no lookup or cast can fail here. */
+private fun menuSelect(row: HTMLElement): HTMLSelectElement =
+    when (row.getAttribute("data-menu-field")) {
+        "share-fps" -> Elements.shareFps
+        "share-priority" -> Elements.sharePriority
+        else -> Elements.shareBitrate
+    }
+
 private var shareMenuRow: HTMLElement? = null
 
 private fun openShareMenuOptions(row: HTMLElement) {
-    val select = document.getElementById(row.getAttribute("data-menu-field")!!) as HTMLSelectElement
+    val select = menuSelect(row)
     shareMenuRow = row
     Elements.shareMenuOptionsTitle.textContent = (select.labels.item(0) as? HTMLElement)?.textContent
     Elements.shareMenuList.innerHTML = ""
@@ -477,7 +485,7 @@ private fun renderShareSettings() {
     val rows = Elements.shareMenuMain.querySelectorAll("[data-menu-field]")
     for (i in 0 until rows.length) {
         val row = rows.item(i) as HTMLElement
-        val select = document.getElementById(row.getAttribute("data-menu-field")!!) as HTMLSelectElement
+        val select = menuSelect(row)
         val selected = select.options.item(select.selectedIndex).asDynamic()
         row.querySelector(".share-menu-value")?.textContent = selected?.text as? String
     }
