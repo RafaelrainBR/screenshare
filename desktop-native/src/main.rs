@@ -1369,6 +1369,8 @@ struct Quality {
     signals: HashMap<TileKey, quality::Signal>,
     /// The problem a tile shows, its label and the explanation its chip gives.
     shown: HashMap<TileKey, (quality::Problem, String, String)>,
+    /// quality_problem goes out once per tile and kind: a link that flips counts once, not on every return.
+    reported: std::collections::BTreeSet<(TileKey, quality::Problem)>,
     /// The encoder our screen last went out on (outbound-rtp encoderImplementation), for share_ended.
     encoder: Option<String>,
 }
@@ -1426,7 +1428,9 @@ impl Quality {
                 continue;
             }
             // quality_problem: which problem, never who or where.
-            desktop_native::metrics::send("quality_problem", &[("problem", format!("{problem:?}"))]);
+            if self.reported.insert((key.clone(), problem)) {
+                desktop_native::metrics::send("quality_problem", &[("problem", format!("{problem:?}"))]);
+            }
             self.shown.insert(key, (problem, problem.label(&name), problem.explanation(&name, viewers)));
         }
     }

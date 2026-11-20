@@ -213,6 +213,9 @@ class ConnectionQuality(
     private val receiveSamples = mutableMapOf<String, ReceiveSample>()
     private val signals = mutableMapOf<String, QualitySignal>()
 
+    // quality_problem goes out once per tile and kind: a link that flips counts once, not on every return.
+    private val reportedProblems = mutableSetOf<Pair<String, QualityProblem>>()
+
     // What each sharer reported, and what each tile shows now.
     private val peerReports = mutableMapOf<String, QualityProblem>()
     private val displayed = mutableMapOf<String, Pair<QualityProblem, String?>>()
@@ -315,7 +318,9 @@ class ConnectionQuality(
             val before = signal.shown
             val shown = signal.update(measured)
             // quality_problem: which problem, never who or where.
-            if (shown != before && shown != null) platform.metric("quality_problem", "problem" to shown.name)
+            if (shown != before && shown != null && reportedProblems.add(tileId to shown)) {
+                platform.metric("quality_problem", "problem" to shown.name)
+            }
         }
         // A tile that stopped reporting must not keep a stale chip; a sharer's report still holds.
         (displayed.keys + tiles.keys + peerReports.keys).forEach(::show)
