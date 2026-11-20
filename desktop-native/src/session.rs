@@ -143,7 +143,9 @@ impl AudioControl {
                 (*enabled, device_id, &view.audio_outputs, "setOutput")
             }
         };
+        // Before the list arrives (the join turns sound on in the same update) the engine checks the id.
         if enabled
+            && view.devices_loaded
             && device_id
                 .as_ref()
                 .is_some_and(|id| !devices.iter().any(|device| &device.id == id))
@@ -1334,6 +1336,17 @@ mod tests {
         assert!(crate::parse_command(&mute.to_string()).is_ok());
         assert!(crate::parse_command(r#"{"command":"getAudioLevels"}"#).is_ok());
     }
+
+    #[test]
+    fn a_saved_device_is_checked_against_the_list_only_once_it_loaded() {
+        let output = AudioControl::Output { enabled: true, device_id: Some("speakers".into()) };
+        let mut view = SessionView::default();
+        assert_eq!(output.command(&view).unwrap()["deviceId"], "speakers", "the engine checks it before the list arrives");
+        view.devices_loaded = true;
+        assert!(output.command(&view).is_err(), "gone from the loaded list");
+        view.audio_outputs = vec![AudioDevice { id: "speakers".into(), label: "Alto-falantes".into() }];
+        assert!(output.command(&view).is_ok());
+    }
     #[test]
     fn room_sounds_are_for_what_others_do_and_only_real_changes() {
         let mut s = Session::new("room".into(), "alice".into());
@@ -1922,6 +1935,8 @@ mod tests {
             enabled: true,
             device_id: Some("missing".into()),
         };
+        assert!(control.command(&session.view).is_ok(), "the engine checks it until the list loads");
+        session.view.devices_loaded = true;
         assert!(control.command(&session.view).is_err());
         session.view.audio_inputs.push(AudioDevice {
             id: "missing".into(),
