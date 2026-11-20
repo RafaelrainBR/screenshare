@@ -1137,7 +1137,7 @@ async fn run_inner(
                                 None
                             },
                             "stats" => { eprintln!("Native engine: {event}"); if let Some(tx) = &status { let _ = tx.send("engine stats received".into()); } None },
-                            "error" => { let code = event.get("code").and_then(Value::as_str).unwrap_or("unknown"); eprintln!("engine error: {code}"); sentry::logger_error!("engine error: {}", code); None },
+                            "error" => { let code = event.get("code").and_then(Value::as_str).unwrap_or("unknown"); let message = engine_error_detail(event.get("message").and_then(Value::as_str).unwrap_or("")); eprintln!("engine error: {code}: {message}"); sentry::logger_error!("engine error: {}: {}", code, message.clone()); None },
                             _ => None,
                         };
                         if let Some(packet) = packet {
@@ -1200,6 +1200,12 @@ fn queue_ui_chat(
     }
     outgoing.push_back(session.chat(text)?);
     Ok(())
+}
+
+/// The engine's error text for the logs: words with digits (addresses, ports, ids) become "#".
+fn engine_error_detail(message: &str) -> String {
+    let words: Vec<&str> = message.split_whitespace().map(|word| if word.chars().any(|c| c.is_ascii_digit()) { "#" } else { word }).collect();
+    words.join(" ").chars().take(120).collect()
 }
 
 #[cfg(test)]
@@ -1309,6 +1315,13 @@ mod tests {
         server.abort();
         assert_eq!(result.unwrap(), Ok(()));
         assert_eq!(joins.load(Ordering::Relaxed), 7);
+    }
+
+    #[test]
+    fn engine_error_detail_keeps_the_reason_without_addresses() {
+        assert_eq!(engine_error_detail("negotiation in progress"), "negotiation in progress");
+        assert_eq!(engine_error_detail("Failed to add candidate 10.0.0.2 54321 udp"), "Failed to add candidate # # udp");
+        assert_eq!(engine_error_detail(&"x ".repeat(100)).len(), 120);
     }
 
     #[test]
