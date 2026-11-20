@@ -143,14 +143,18 @@ impl AudioControl {
                 (*enabled, device_id, &view.audio_outputs, "setOutput")
             }
         };
-        // Before the list arrives (the join turns sound on in the same update) the engine checks the id.
+        let mut device_id = device_id.as_ref();
+        // Before the list arrives the engine checks the id.
         if enabled
             && view.devices_loaded
-            && device_id
-                .as_ref()
-                .is_some_and(|id| !devices.iter().any(|device| &device.id == id))
+            && device_id.is_some_and(|id| !devices.iter().any(|device| &device.id == id))
         {
-            return Err("Dispositivo não está na lista atual; atualize os dispositivos.".into());
+            // A saved output that went away (new headset, driver update) plays on the system default,
+            // as browsers do, instead of leaving the room silent.
+            if !matches!(self, Self::Output { .. }) {
+                return Err("Dispositivo não está na lista atual; atualize os dispositivos.".into());
+            }
+            device_id = None;
         }
         let active = match self {
             Self::Microphone { .. } => view.microphone_enabled,
@@ -161,7 +165,7 @@ impl AudioControl {
             return Err("Desligue o áudio antes de aplicar outro dispositivo.".into());
         }
         Ok(
-            json!({"command":command,"enabled":enabled,"deviceId":if enabled {device_id.as_ref()} else {None},"volume":1.0}),
+            json!({"command":command,"enabled":enabled,"deviceId":if enabled {device_id} else {None},"volume":1.0}),
         )
     }
 }
@@ -1356,7 +1360,7 @@ mod tests {
         let mut view = SessionView::default();
         assert_eq!(output.command(&view).unwrap()["deviceId"], "speakers", "the engine checks it before the list arrives");
         view.devices_loaded = true;
-        assert!(output.command(&view).is_err(), "gone from the loaded list");
+        assert_eq!(output.command(&view).unwrap()["deviceId"], Value::Null, "gone from the list: the system default plays");
         view.audio_outputs = vec![AudioDevice { id: "speakers".into(), label: "Alto-falantes".into() }];
         assert!(output.command(&view).is_ok());
     }
