@@ -143,12 +143,18 @@ impl AudioControl {
                 (*enabled, device_id, &view.audio_outputs, "setOutput")
             }
         };
+        let mut device_id = device_id.as_ref();
+        // Before the list arrives the engine checks the id.
         if enabled
-            && device_id
-                .as_ref()
-                .is_some_and(|id| !devices.iter().any(|device| &device.id == id))
+            && view.devices_loaded
+            && device_id.is_some_and(|id| !devices.iter().any(|device| &device.id == id))
         {
-            return Err("Dispositivo não está na lista atual; atualize os dispositivos.".into());
+            // A saved output that went away (new headset, driver update) plays on the system default,
+            // as browsers do, instead of leaving the room silent.
+            if !matches!(self, Self::Output { .. }) {
+                return Err("Dispositivo não está na lista atual; atualize os dispositivos.".into());
+            }
+            device_id = None;
         }
         let active = match self {
             Self::Microphone { .. } => view.microphone_enabled,
@@ -159,7 +165,7 @@ impl AudioControl {
             return Err("Desligue o áudio antes de aplicar outro dispositivo.".into());
         }
         Ok(
-            json!({"command":command,"enabled":enabled,"deviceId":if enabled {device_id.as_ref()} else {None},"volume":1.0}),
+            json!({"command":command,"enabled":enabled,"deviceId":if enabled {device_id} else {None},"volume":1.0}),
         )
     }
 }
@@ -1135,7 +1141,7 @@ async fn run_inner(
                                 None
                             },
                             "stats" => { eprintln!("Native engine: {event}"); if let Some(tx) = &status { let _ = tx.send("engine stats received".into()); } None },
-                            "error" => { let code = event.get("code").and_then(Value::as_str).unwrap_or("unknown"); eprintln!("engine error: {code}"); sentry::logger_error!("engine error: {}", code); None },
+                            "error" => { let code = event.get("code").and_then(Value::as_str).unwrap_or("unknown"); let message = engine_error_detail(event.get("message").and_then(Value::as_str).unwrap_or("")); eprintln!("engine error: {code}: {message}"); sentry::logger_error!("engine error: {}: {}", code, message.clone()); None },
                             _ => None,
                         };
                         if let Some(packet) = packet {
@@ -1198,6 +1204,12 @@ fn queue_ui_chat(
     }
     outgoing.push_back(session.chat(text)?);
     Ok(())
+}
+
+/// The engine's error text for the logs: words with digits (addresses, ports, ids) become "#".
+fn engine_error_detail(message: &str) -> String {
+    let words: Vec<&str> = message.split_whitespace().map(|word| if word.chars().any(|c| c.is_ascii_digit()) { "#" } else { word }).collect();
+    words.join(" ").chars().take(120).collect()
 }
 
 #[cfg(test)]
@@ -1310,6 +1322,13 @@ mod tests {
     }
 
     #[test]
+    fn engine_error_detail_keeps_the_reason_without_addresses() {
+        assert_eq!(engine_error_detail("negotiation in progress"), "negotiation in progress");
+        assert_eq!(engine_error_detail("Failed to add candidate 10.0.0.2 54321 udp"), "Failed to add candidate # # udp");
+        assert_eq!(engine_error_detail(&"x ".repeat(100)).len(), 120);
+    }
+
+    #[test]
     fn server_ice_servers_reach_the_engine() {
         let mut session = Session::new("room".into(), "alice".into());
         session.receive(r#"{"type":"room-joined","rid":"room","sid":"a"}"#, 1).unwrap();
@@ -1333,6 +1352,17 @@ mod tests {
         assert_eq!(mute, json!({"command":"setPeerMuted","peerId":"b","muted":true}));
         assert!(crate::parse_command(&mute.to_string()).is_ok());
         assert!(crate::parse_command(r#"{"command":"getAudioLevels"}"#).is_ok());
+    }
+
+    #[test]
+    fn a_saved_device_is_checked_against_the_list_only_once_it_loaded() {
+        let output = AudioControl::Output { enabled: true, device_id: Some("speakers".into()) };
+        let mut view = SessionView::default();
+        assert_eq!(output.command(&view).unwrap()["deviceId"], "speakers", "the engine checks it before the list arrives");
+        view.devices_loaded = true;
+        assert_eq!(output.command(&view).unwrap()["deviceId"], Value::Null, "gone from the list: the system default plays");
+        view.audio_outputs = vec![AudioDevice { id: "speakers".into(), label: "Alto-falantes".into() }];
+        assert!(output.command(&view).is_ok());
     }
     #[test]
     fn room_sounds_are_for_what_others_do_and_only_real_changes() {
@@ -1922,6 +1952,8 @@ mod tests {
             enabled: true,
             device_id: Some("missing".into()),
         };
+        assert!(control.command(&session.view).is_ok(), "the engine checks it until the list loads");
+        session.view.devices_loaded = true;
         assert!(control.command(&session.view).is_err());
         session.view.audio_inputs.push(AudioDevice {
             id: "missing".into(),

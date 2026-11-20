@@ -80,7 +80,8 @@ class Room(
     ) {
         if (packet.getSide() != CLIENT) return
 
-        logger.info("Room [$id] received from [${user.username}] the packet [$packet]")
+        // Only the type: the packet carries chat text, SDP with public IPs and ICE passwords.
+        logger.debug("Room [$id] received from [${user.username}] a ${packet::class.simpleName}")
 
         when (packet) {
             is SendChatMessage -> {

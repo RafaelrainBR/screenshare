@@ -1224,7 +1224,9 @@ fn tick(app: &mut App) -> Task<Message> {
         send_volume(app, peer, screen, percent);
     }
     // The web plays the room sound unless it was muted last time; again after each reconnection.
-    if app.view.local_socket_id.is_some() && app.output_generation != app.view.generation {
+    // It waits for the device list, so a saved output that went away falls back to the default.
+    let devices_ready = app.view.devices_loaded || app.view.devices_error.is_some();
+    if app.view.local_socket_id.is_some() && devices_ready && app.output_generation != app.view.generation {
         app.output_generation = app.view.generation;
         if !app.output_muted && !app.view.output_enabled {
             audio(app, AudioControl::Output { enabled: true, device_id: app.output_device.clone() });
@@ -1367,6 +1369,8 @@ struct Quality {
     signals: HashMap<TileKey, quality::Signal>,
     /// The problem a tile shows, its label and the explanation its chip gives.
     shown: HashMap<TileKey, (quality::Problem, String, String)>,
+    /// quality_problem goes out once per tile and kind: a link that flips counts once, not on every return.
+    reported: std::collections::BTreeSet<(TileKey, quality::Problem)>,
     /// The encoder our screen last went out on (outbound-rtp encoderImplementation), for share_ended.
     encoder: Option<String>,
 }
@@ -1424,7 +1428,9 @@ impl Quality {
                 continue;
             }
             // quality_problem: which problem, never who or where.
-            desktop_native::metrics::send("quality_problem", &[("problem", format!("{problem:?}"))]);
+            if self.reported.insert((key.clone(), problem)) {
+                desktop_native::metrics::send("quality_problem", &[("problem", format!("{problem:?}"))]);
+            }
             self.shown.insert(key, (problem, problem.label(&name), problem.explanation(&name, viewers)));
         }
     }
