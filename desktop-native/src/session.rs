@@ -1030,10 +1030,11 @@ async fn run_inner(
                         last_stats = Instant::now();
                     }
                     for (peer, (attempt, due)) in &mut ice_retries {
-                        if *attempt < 3 && *due <= Instant::now() && session.peers.contains(peer) {
+                        // No give-up: a link down longer than a few tries otherwise stays frozen until someone rejoins.
+                        if *due <= Instant::now() && session.peers.contains(peer) {
                             engine.submit(json!({"command":"restartIce","peerId":peer}))?;
-                            *due = Instant::now() + Duration::from_secs([1, 2, 4][*attempt as usize]);
-                            *attempt += 1;
+                            *due = Instant::now() + Duration::from_secs([1, 2, 4, 8, 15][(*attempt as usize).min(4)]);
+                            *attempt = attempt.saturating_add(1);
                         }
                     }
                     while let Ok(event) = engine.events.try_recv() {
@@ -1129,12 +1130,17 @@ async fn run_inner(
                             "peerState" => {
                                 match event.get("state").and_then(Value::as_str) {
                                     Some("connected") => {
-                                        ice_retries.remove(peer);
+                                        if let Some((attempts, _)) = ice_retries.remove(peer) {
+                                            crate::metrics::send("peer_link", &[("state", "recovered".into()), ("attempts", attempts.to_string())]);
+                                        }
                                         if session.peers.contains(peer) {
                                             engine.submit(json!({"command":"ensurePeer","peerId":peer,"polite":session.identity().is_some_and(|id| id > peer),"initiate":true}))?;
                                         }
                                     }
-                                    Some("failed") => { ice_retries.insert(peer.into(), (0, Instant::now())); }
+                                    Some("failed") => {
+                                        crate::metrics::send("peer_link", &[("state", "failed".into())]);
+                                        ice_retries.insert(peer.into(), (0, Instant::now()));
+                                    }
                                     Some("disconnected") => { ice_retries.entry(peer.into()).or_insert((0, Instant::now() + Duration::from_secs(5))); }
                                     _ => {}
                                 }
